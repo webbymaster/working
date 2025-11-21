@@ -1,11 +1,87 @@
 <?php
-// /includes/hooks/webbyreg_regru_real_sync.php
-// WebbyReg + REG.RU Real Sync Hook
-// Версия: 2.0 (очищенная и оптимизированная)
+// /includes/hooks/webbyreg_regru_sync.php
+// WebbyReg + REG.RU Complete Sync Hook
+// ВСЕ функции синхронизации в одном месте!
 
 if (!defined("WHMCS")) {
     die("This file cannot be accessed directly");
 }
+
+// =============================================================================
+// 🎯 СТАНДАРТНЫЕ КНОПКИ WHMCS - ВСЕ В ОДНОМ МЕСТЕ
+// =============================================================================
+
+/**
+ * Все кастомные кнопки WebbyReg
+ */
+add_hook('AdminCustomButtonArray', 1, function() {
+    return [
+        "Синхронизировать автопродление" => "webbyreg_syncAutoRenew",
+        "🔄 Синхронизация REG.RU" => "webbyreg_openRegRuSync"
+    ];
+});
+
+
+/**
+ * 🎯 Функция управления автопродлением (перенесена из модуля)
+ */
+function webbyreg_toggleAutoRenew($params) {
+    logActivity("🎯 WebbyReg: toggleAutoRenew CALLED! Domain: {$params['sld']}.{$params['tld']}");
+    
+    $apiUsername = $params['APIUsername'] ?? '';
+    $apiKey = $params['APIKey'] ?? '';
+    
+    if (empty($apiUsername) || empty($apiKey)) {
+        logActivity("❌ WebbyReg: API credentials missing");
+        return ['error' => 'API credentials not configured'];
+    }
+
+    // 🎯 Определяем статус автопродления
+    if (isset($params['autorenew'])) {
+        $autoRenew = $params['autorenew'];
+        logActivity("🎯 WebbyReg: Using WHMCS param - autorenew = " . ($autoRenew ? 'ON' : 'OFF'));
+    } else {
+        $domainData = full_query("SELECT donotrenew FROM tbldomains WHERE id = " . (int)$params['domainid']);
+        $domain = mysql_fetch_assoc($domainData);
+        
+        if ($domain) {
+            $autoRenew = ($domain['donotrenew'] == 1);
+            logActivity("🎯 WebbyReg: Using DB - donotrenew = {$domain['donotrenew']}, autorenew = " . ($autoRenew ? 'ON' : 'OFF'));
+        } else {
+            logActivity("❌ WebbyReg: Domain not found");
+            return ['error' => 'Domain not found'];
+        }
+    }
+
+    try {
+        // 🎯 Подключаем класс API из модуля
+        $api = new \WHMCS\Module\Registrar\Webbyreg\ApiClient($apiUsername, $apiKey, $params['TestMode']);
+
+        $response = $api->call('service/set_autorenew_flag', [
+            'dname' => $params['sld'] . '.' . $params['tld'],
+            'flag_value' => $autoRenew ? 1 : 0,
+            'output_content_type' => 'plain'
+        ]);
+
+        logActivity("📥 WebbyReg: API Response: " . json_encode($response));
+
+        if (isset($response['result']) && $response['result'] === 'success') {
+            $message = '✅ Автопродление ' . ($autoRenew ? 'включено' : 'отключено') . ' у регистратора';
+            logActivity("🎉 WebbyReg: SUCCESS - " . $message);
+            return ['success' => true, 'message' => $message];
+        } else {
+            $errorMsg = '❌ Ошибка API: ' . ($response['error_text'] ?? 'Unknown error');
+            logActivity("💥 WebbyReg: ERROR - " . $errorMsg);
+            return ['success' => false, 'message' => $errorMsg];
+        }
+
+    } catch (\Exception $e) {
+        $errorMsg = '❌ Exception: ' . $e->getMessage();
+        logActivity("🔥 WebbyReg: EXCEPTION - " . $errorMsg);
+        return ['success' => false, 'message' => $errorMsg];
+    }
+}
+
 
 // =============================================================================
 // 🎯 ОСНОВНОЙ HOOK: Панель синхронизации на странице домена
