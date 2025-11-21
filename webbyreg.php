@@ -1353,7 +1353,84 @@ function webbyreg_GetAutoRenewalStatus($params)
 
 /**
  * Client Area Output.
- */
+
+function webbyreg_ClientArea($params)
+{
+    logActivity("🎯 WebbyReg: ClientArea CALLED for " . $params['sld'] . '.' . $params['tld']);
+    
+    // 🎯 БЕЗОПАСНОЕ ЛОГИРОВАНИЕ (без паролей)
+    $safeParams = $params;
+    unset($safeParams['APIKey'], $safeParams['Password']); // Убираем чувствительные данные
+    logActivity("🎯 WebbyReg ClientArea Safe Params: " . json_encode(array_keys($safeParams)));
+    
+    try {
+        $nsInfo = webbyreg_GetCurrentNameservers($params);
+        $action = $_GET['action'] ?? 'none';
+        
+        // 🎯 ПРОВЕРКА ОШИБОК В NS ИНФОРМАЦИИ
+        if (isset($nsInfo['error'])) {
+            logActivity("❌ WebbyReg ClientArea - NS Error: " . $nsInfo['error']);
+            $nsInfo['is_regru_ns'] = false;
+            $nsInfo['ns'] = ['Не удалось получить NS'];
+        }
+        
+        logActivity("🎯 WebbyReg ClientArea - Action: " . $action);
+        logActivity("🎯 WebbyReg ClientArea - NS Info: " . json_encode($nsInfo));
+        logActivity("🎯 WebbyReg ClientArea - Is REG.RU NS: " . ($nsInfo['is_regru_ns'] ? 'YES' : 'NO'));
+        
+        $output = '
+        <div class="card">
+            <div class="card-header">
+                <i class="fas fa-globe"></i> Управление доменом  <strong>' . $params['sld'] . '.' . $params['tld'] . '</strong>
+            </div>
+            <div class="card-body">';
+        
+        // 🎯 ИНФОРМАЦИЯ О NS С ЗАЩИТОЙ ОТ ОШИБОК
+        if (!$nsInfo['is_regru_ns'] && !empty($nsInfo['ns'])) {
+            $nsList = is_array($nsInfo['ns']) ? implode(', ', $nsInfo['ns']) : $nsInfo['ns'];
+            $output .= '
+                <div class="alert alert-info">
+                    <strong>🌐 Информация о NS:</strong>
+                    <p class="mb-0 mt-2">Домен использует внешние NS серверы: ' . $nsList . '</p>
+                </div>';
+        }
+        
+        // 🎯 ДОБАВИМ ПОЛЕЗНЫЕ КНОПКИ ДЛЯ КЛИЕНТА
+        $output .= '
+            <div class="row">
+                <div class="col-md-6">
+                    <a href="clientarea.php?action=domaindetails&id=' . $params['domainid'] . '" class="btn btn-primary btn-block">
+                        <i class="fas fa-info-circle"></i> Подробности домена
+                    </a>
+                </div>
+                <div class="col-md-6">
+                    <a href="clientarea.php?action=domainmanagement&id=' . $params['domainid'] . '" class="btn btn-success btn-block">
+                        <i class="fas fa-cog"></i> Управление доменом
+                    </a>
+                </div>
+            </div>';
+        
+        $output .= '
+            </div>
+        </div>';
+        
+        logActivity("✅ WebbyReg ClientArea - Successfully returned output");
+        
+        return $output;
+        
+    } catch (Exception $e) {
+        // 🎯 ОБРАБОТКА ОШИБОК
+        logActivity("❌ WebbyReg ClientArea - Exception: " . $e->getMessage());
+        
+        return '
+        <div class="alert alert-danger">
+            <strong>⚠️ Временная ошибка</strong>
+            <p>Не удалось загрузить информацию о домене. Пожалуйста, попробуйте позже.</p>
+        </div>';
+    }
+} 
+
+// Второй вариант
 function webbyreg_ClientArea($params)
 {
     logActivity("🎯 WebbyReg: ClientArea CALLED for " . $params['sld'] . '.' . $params['tld']);
@@ -1377,14 +1454,14 @@ function webbyreg_ClientArea($params)
         <div class="card-body">';
     
     // ПРОСТОЙ ТЕСТ - ВСЕГДА ПОКАЗЫВАЕМ КНОПКУ
-    /*$output .= '
+    $output .= '
         <div class="alert alert-success">
             <strong>🎯 ТЕСТ: WebbyReg ClientArea работает!</strong>
             <p class="mb-2 mt-2">Эта панель отображается из функции ClientArea модуля WebbyReg.</p>
             <a href="https://webbyhost.ru" target="_blank" class="btn btn-success">
                 <i class="fas fa-external-link-alt"></i> Перейти на WebbyHost
             </a>
-        </div>';*/
+        </div>';
     
     // ДОПОЛНИТЕЛЬНО: ИНФОРМАЦИЯ О NS
     if (!$nsInfo['is_regru_ns']) {
@@ -1402,160 +1479,7 @@ function webbyreg_ClientArea($params)
     logActivity("🎯 WebbyReg ClientArea - Returning output");
     
     return $output;
-}
-
-// ============================================================================
-// ========================== СИНХРОНИЗАЦИЯ С REG.RU ==========================
-// ============================================================================
-
-// =============================================================================
-// 🎯 🎯 Обработчик кнопки "Синхронизация REG.RU" - ВОЗВРАЩАЕМ МОДАЛКУ
-// =============================================================================
-
-add_hook('AdminAreaHeaderOutput', 1, function($vars) {
-    $currentPage = $vars['filename'] ?? '';
-    $isDomainPage = $currentPage == 'clientsdomains' && isset($_GET['id']);
-    
-    if (!$isDomainPage) {
-        return '';
-    }
-    
-    $domainId = (int)$_GET['id'];
-    
-    // Проверяем что домен использует WebbyReg
-    $domainData = full_query("SELECT registrar FROM tbldomains WHERE id = {$domainId}");
-    $domain = mysql_fetch_assoc($domainData);
-    
-    if (!$domain || $domain['registrar'] != 'webbyreg') {
-        return '';
-    }
-    
-    // 🎯 ДОБАВЛЯЕМ КНОПКУ СРАЗУ В HTML
-    $buttonHtml = <<<HTML
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-    // Функция для добавления нашей кнопки
-    function injectWebbyRegButton() {
-        const allLabels = document.querySelectorAll('td.fieldlabel');
-        let registrarRow = null;
-        
-        // Ищем строку с "Команды регистратора"
-        for (let label of allLabels) {
-            if (label.textContent.includes('Команды регистратора')) {
-                registrarRow = label.parentNode;
-                break;
-            }
-        }
-        
-        if (!registrarRow) return;
-        
-        // Проверяем, не добавили ли уже кнопку
-        if (document.getElementById('webbyreg-instant-btn')) {
-            return;
-        }
-        
-        // Находим ячейку с кнопками
-        const buttonsCell = registrarRow.querySelector('td:nth-child(2)');
-        if (!buttonsCell) return;
-        
-        // Создаем нашу кнопку
-        const syncBtn = document.createElement('input');
-        syncBtn.type = 'button';
-        syncBtn.id = 'webbyreg-instant-btn';
-        syncBtn.value = 'Синхронизация REG.RU';
-        syncBtn.className = 'button btn btn-default';
-        syncBtn.style.marginLeft = '5px';
-        
-        // Обработчик клика
-        syncBtn.onclick = function() {
-            const modal = document.getElementById('webbyreg-regru-real-sync');
-            if (modal) {
-                modal.style.display = 'block';
-            }
-        };
-        
-        // Добавляем кнопку сразу (без задержки)
-        buttonsCell.appendChild(document.createTextNode(' '));
-        buttonsCell.appendChild(syncBtn);
-    }
-    
-    // 🎯 ЗАПУСКАЕМ СРАЗУ - БЕЗ ЗАДЕРЖКИ!
-    injectWebbyRegButton();
-});
-</script>
-HTML;
-
-    return $buttonHtml;
-});
-
-
-// =============================================================================
-// 🎯 АВТОПРОДЛЕНИЕ - ЕДИНСТВЕННАЯ ФУНКЦИЯ ===================
-// =============================================================================
-
-/**
- * Функция управления автопродлением
- * WHMCS автоматически вызывает эту функцию при переключении
- */
-function toggleAutoRenew($params) {
-    logActivity("🎯 WebbyReg: toggleAutoRenew CALLED! Domain: {$params['sld']}.{$params['tld']}");
-    logActivity("🔍 MODULE DEBUG Params: " . json_encode($params));
-    
-    $apiUsername = $params['APIUsername'] ?? '';
-    $apiKey = $params['APIKey'] ?? '';
-    
-    if (empty($apiUsername) || empty($apiKey)) {
-        logActivity("❌ WebbyReg: API credentials missing");
-        return ['error' => 'API credentials not configured'];
-    }
-
-    // 🎯 ИСПРАВЛЕНИЕ: Если WHMCS не передал autorenew - определяем из базы
-    if (isset($params['autorenew'])) {
-        // Клиентская зона - используем параметр от WHMCS
-        $autoRenew = $params['autorenew'];
-        logActivity("🎯 WebbyReg: Using WHMCS param - autorenew = " . ($autoRenew ? 'ON' : 'OFF'));
-    } else {
-        // Админка - определяем по изменению в базе
-        $domainData = full_query("SELECT donotrenew FROM tbldomains WHERE id = " . (int)$params['domainid']);
-        $domain = mysql_fetch_assoc($domainData);
-        
-        if ($domain) {
-            // 🎯 ИНВЕРСИЯ: donotrenew=0 → автопродление ВКЛ
-            $autoRenew = ($domain['donotrenew'] == 1);
-            logActivity("🎯 WebbyReg: Using DB - donotrenew = {$domain['donotrenew']}, autorenew = " . ($autoRenew ? 'ON' : 'OFF'));
-        } else {
-            logActivity("❌ WebbyReg: Domain not found");
-            return ['error' => 'Domain not found'];
-        }
-    }
-
-    try {
-        $api = new \WHMCS\Module\Registrar\Webbyreg\ApiClient($apiUsername, $apiKey, $params['TestMode']);
-
-        $response = $api->call('service/set_autorenew_flag', [
-            'dname' => $params['sld'] . '.' . $params['tld'],
-            'flag_value' => $autoRenew ? 1 : 0,
-            'output_content_type' => 'plain'
-        ]);
-
-        logActivity("📥 WebbyReg: API Response: " . json_encode($response));
-
-        if (isset($response['result']) && $response['result'] === 'success') {
-            $message = '✅ Автопродление ' . ($autoRenew ? 'включено' : 'отключено') . ' у регистратора';
-            logActivity("🎉 WebbyReg: SUCCESS - " . $message);
-            return ['success' => true, 'message' => $message];
-        } else {
-            $errorMsg = '❌ Ошибка API: ' . ($response['error_text'] ?? 'Unknown error');
-            logActivity("💥 WebbyReg: ERROR - " . $errorMsg);
-            return ['success' => false, 'message' => $errorMsg];
-        }
-
-    } catch (\Exception $e) {
-        $errorMsg = '❌ Exception: ' . $e->getMessage();
-        logActivity("🔥 WebbyReg: EXCEPTION - " . $errorMsg);
-        return ['success' => false, 'message' => $errorMsg];
-    }
-}
+}/*
 
 /**
  * Кнопка ручной синхронизации (оставляем для надежности)
@@ -1566,5 +1490,66 @@ function webbyreg_AdminCustomButtonArray() {
 
 function webbyreg_syncAutoRenew($params) {
     logActivity("🔧 WebbyReg: MANUAL SYNC BUTTON PRESSED");
-    return toggleAutoRenew($params);
+    return webbyreg_toggleAutoRenew($params);
+}
+
+/**
+ * 🎯 Обработчик кнопки "Синхронизация REG.RU"
+ */
+function webbyreg_openRegRuSync($params) {
+    $domainId = $params['domainid'];
+    $domainName = $params['sld'] . '.' . $params['tld'];
+    
+    logActivity("🎯 WEBBYREG: RegRu Sync button pressed for domain {$domainName}");
+    
+    // 🎯 ПРОСТОЙ И НАДЕЖНЫЙ JavaScript ДЛЯ ПОКАЗА МОДАЛКИ
+    return <<<HTML
+<script>
+function showWebbyRegModal() {
+    console.log('🔍 WEBBYREG: Searching for modal...');
+    
+    // Пробуем разные селекторы
+    const selectors = [
+        '#webbyreg-regru-real-sync',
+        '[id*="webbyreg"]',
+        '[class*="webbyreg"]',
+        'div[style*="fixed"]'
+    ];
+    
+    for (let selector of selectors) {
+        const modal = document.querySelector(selector);
+        if (modal && modal.innerHTML.includes('WebbyReg')) {
+            console.log('✅ WEBBYREG: Found modal with selector:', selector);
+            modal.style.display = 'block';
+            modal.style.zIndex = '10000';
+            return true;
+        }
+    }
+    
+    console.error('❌ WEBBYREG: Modal not found with any selector');
+    
+    // Создаем простую модалку на лету
+    const tempModal = document.createElement('div');
+    tempModal.innerHTML = `
+        <div style="position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); z-index:10000; background:#0250c8; color:white; padding:30px; border-radius:15px; text-align:center;">
+            <h3>🎯 WebbyReg + REG.RU</h3>
+            <p>Модалка синхронизации не загружена</p>
+            <button onclick="this.parentElement.parentElement.remove()" style="background:#01327e; color:white; border:none; padding:10px 20px; border-radius:6px; cursor:pointer;">
+                ❌ Закрыть
+            </button>
+        </div>
+    `;
+    document.body.appendChild(tempModal);
+    
+    return false;
+}
+
+// Запускаем показ модалки
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', showWebbyRegModal);
+} else {
+    setTimeout(showWebbyRegModal, 100);
+}
+</script>
+HTML;
 }
